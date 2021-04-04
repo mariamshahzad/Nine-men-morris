@@ -1,0 +1,188 @@
+typedef std::vector<wxPoint> PointVector;
+
+class CustomPayload
+{
+public:
+    CustomPayload(const wxString& name = wxEmptyString, size_t level = 0)
+        : m_name(name), m_level(level)
+    {}
+
+    void SetName(const wxString& name) { m_name = name; }
+    void SetLevel(size_t level) { m_level = level; }
+    void SetPoints(const PointVector& points) { m_points = points; }
+
+    wxString GetName() const { return m_name; }
+    size_t GetLevel() const { return m_level; }
+    const PointVector& GetPoints() { return m_points; }
+private:
+    wxString m_name;
+    size_t m_level;
+    PointVector m_points;
+};
+
+
+class MyThread : public wxThread
+{
+public:
+    enum
+    {
+        ThreadStarted,
+        ThreadPayload,
+        ThreadFinished
+    };
+
+    MyThread(wxEvtHandler* sink)
+        : wxThread(wxTHREAD_JOINABLE), m_sink(sink)
+    {}
+protected:
+    wxEvtHandler* m_sink;
+
+    ExitCode Entry() override
+    {
+        size_t level = 0;
+        wxThreadEvent evt;
+
+        evt.SetInt(ThreadStarted);
+        evt.SetString("Thread started.");
+        wxQueueEvent(m_sink, evt.Clone());
+
+        while (!TestDestroy())
+        {
+            wxString name;
+            PointVector points;
+            std::shared_ptr<CustomPayload> payload(new CustomPayload());
+
+            Sleep(1000); // this simulates thread working
+
+            level++;
+            evt.SetInt(ThreadPayload);
+            evt.SetString("Sending payload.");
+
+            name.Printf("Level %zu", level);
+            for (size_t i = 0; i < level; ++i)
+                points.push_back(wxPoint(5, 5));
+
+            payload->SetName(name);
+            payload->SetLevel(level);
+            payload->SetPoints(points);
+            evt.SetPayload(payload);
+            wxQueueEvent(m_sink, evt.Clone());
+        }
+
+        evt.SetString("Thread finished.");
+        evt.SetInt(ThreadFinished);
+        wxQueueEvent(m_sink, evt.Clone());
+
+        return static_cast<wxThread::ExitCode>(nullptr);
+    }
+};
+
+class MyFrame : public wxFrame
+{
+public:
+    MyFrame() : wxFrame(nullptr, wxID_ANY, "Test", wxDefaultPosition, wxSize(800, 600))
+    {
+        wxPanel* mainPanel = new wxPanel(this);
+        wxBoxSizer* mainPanelSizer = new wxBoxSizer(wxVERTICAL);
+        wxButton* button = nullptr;
+
+        button = new wxButton(mainPanel, wxID_ANY, "&Start Thread");
+        button->Bind(wxEVT_COMMAND_BUTTON_CLICKED, &MyFrame::OnStartThread, this);
+        mainPanelSizer->Add(button, wxSizerFlags().Expand().DoubleBorder());
+
+        button = new wxButton(mainPanel, wxID_ANY, "S&top Thread");
+        button->Bind(wxEVT_COMMAND_BUTTON_CLICKED, &MyFrame::OnStopThread, this);
+        mainPanelSizer->Add(button, wxSizerFlags().Expand().DoubleBorder());
+
+        wxTextCtrl* logCtrl = new wxTextCtrl(mainPanel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+            wxTE_MULTILINE | wxTE_READONLY | wxTE_RICH2);
+        wxLog::SetActiveTarget(new wxLogTextCtrl(logCtrl));
+        mainPanelSizer->Add(logCtrl, wxSizerFlags().Expand().DoubleBorder().Proportion(5));
+
+        //Bind(wxEVT_CLOSE_WINDOW, &MyFrame::OnClose, this);
+        Bind(wxEVT_THREAD, &MyFrame::OnThread, this);
+
+        mainPanel->SetSizer(mainPanelSizer);
+    }
+protected:
+    MyThread* m_thread{ nullptr };
+
+    void OnStartThread(wxCommandEvent&)
+    {
+        if (m_thread)
+        {
+            wxLogError("Thread is already running.");
+            return;
+        }
+
+        m_thread = new MyThread(this);
+        if (m_thread->Run() != wxTHREAD_NO_ERROR)
+        {
+            delete m_thread;
+            m_thread = nullptr;
+            wxLogError("Could not create the thread!");
+        }
+    }
+
+    void OnStopThread(wxCommandEvent&)
+    {
+        if (!m_thread)
+        {
+            wxLogError("Thread is not running.");
+            return;
+        }
+
+        StopThread();
+    }
+    /*
+    void MyFrame::OnClose(wxCloseEvent& event)
+    {
+        if (m_thread)
+        {
+            if (wxMessageBox("Thread is still runing, quit anyway?",
+                "Question", wxYES_NO | wxNO_DEFAULT) != wxYES)
+            {
+                return;
+            }
+            StopThread();
+
+        }
+
+        Destroy();
+    }
+    */
+    void OnThread(wxThreadEvent& evt)
+    {
+        wxLogMessage(evt.GetString());
+
+        if (evt.GetInt() == MyThread::ThreadPayload)
+        {
+            std::shared_ptr<CustomPayload> payload = evt.GetPayload<std::shared_ptr<CustomPayload>>();
+
+            wxCHECK_RET(payload, "Invalid payload");
+            wxLogMessage("Name = %s, level = %zu, number of points = %zu",
+                payload->GetName(), payload->GetLevel(), payload->GetPoints().size());
+        }
+    }
+
+    void StopThread()
+    {
+        wxCHECK_RET(m_thread, "Thread is not running");
+
+        wxLogMessage("Stopping the thread....");
+
+        m_thread->Delete();
+        delete m_thread;
+        m_thread = nullptr;
+    }
+};
+
+class MyApp : public wxApp
+{
+public:
+    bool OnInit() override
+    {
+        (new MyFrame)->Show();
+        return true;
+    }
+}; wxIMPLEMENT_APP(MyApp);
